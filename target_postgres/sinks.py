@@ -296,44 +296,76 @@ class PostgresSink(SQLSink):
             )
             connection.execute(insert_stmt)
         else:
-            join_predicates = []
-            to_table_key: sa.Column
-            for key in join_keys:
-                from_table_key: sa.Column = from_table.columns[key]
-                to_table_key = to_table.columns[key]
-                join_predicates.append(from_table_key == to_table_key)
+            upsert_method = self.config.get("upsert_method", "on_conflict")
+            self.logger.info(upsert_method)
+            self.logger.info(self.config)
+            # upsert_method = "on_conflict"
 
-            join_condition = sa.and_(*join_predicates)
+            if upsert_method == "outer_join":
+                join_predicates = []
+                to_table_key: sa.Column
+                for key in join_keys:
+                    from_table_key: sa.Column = from_table.columns[key]
+                    to_table_key = to_table.columns[key]
+                    join_predicates.append(from_table_key == to_table_key)
 
-            where_predicates = []
-            for key in join_keys:
-                to_table_key = to_table.columns[key]
-                where_predicates.append(to_table_key.is_(None))
-            where_condition = sa.and_(*where_predicates)
+                join_condition = sa.and_(*join_predicates)
 
-            select_stmt = (
-                sa.select(from_table.columns)
-                .select_from(from_table.outerjoin(to_table, join_condition))
-                .where(where_condition)
-            )
-            insert_stmt = sa.insert(to_table).from_select(
-                names=from_table.columns, select=select_stmt
-            )
+                where_predicates = []
+                for key in join_keys:
+                    to_table_key = to_table.columns[key]
+                    where_predicates.append(to_table_key.is_(None))
+                where_condition = sa.and_(*where_predicates)
 
-            connection.execute(insert_stmt)
+                select_stmt = (
+                    sa.select(from_table.columns)
+                    .select_from(from_table.outerjoin(to_table, join_condition))
+                    .where(where_condition)
+                )
+                insert_stmt = sa.insert(to_table).from_select(
+                    names=from_table.columns, select=select_stmt
+                )
 
-            # Update
-            where_condition = join_condition
-            update_columns = {}
-            for column_name in self.schema["properties"]:
-                from_table_column: sa.Column = from_table.columns[column_name]
-                to_table_column: sa.Column = to_table.columns[column_name]
-                update_columns[to_table_column] = from_table_column
+                connection.execute(insert_stmt)
 
-            update_stmt = (
-                sa.update(to_table).where(where_condition).values(update_columns)
-            )
-            connection.execute(update_stmt)
+                # Update
+                where_condition = join_condition
+                update_columns = {}
+                for column_name in self.schema["properties"]:
+                    from_table_column: sa.Column = from_table.columns[column_name]
+                    to_table_column: sa.Column = to_table.columns[column_name]
+                    update_columns[to_table_column] = from_table_column
+
+                update_stmt = (
+                    sa.update(to_table).where(where_condition).values(update_columns)
+                )
+                connection.execute(update_stmt)
+            elif upsert_method == "on_conflict":
+                # Use the ON CONFLICT clause to handle upserts
+                insert_stmt = (
+                    sa_postgres.insert(to_table)
+                    .from_select(
+                        names=from_table.columns, select=sa.select(from_table)
+                    )
+                )
+                insert_stmt = (
+                    insert_stmt
+                        .on_conflict_do_update(
+                        index_elements=join_keys,
+                        set_={
+                            column.name: insert_stmt.excluded[column.name]
+                            for column in from_table.columns
+                            if column.name not in join_keys and column.name != "idx"
+                        },
+                    )
+                )
+                self.logger.info("Inserting with SQL(on_conflict method): %s", insert_stmt)
+                connection.execute(insert_stmt)
+            else:
+                self.logger.warning(
+                    "Upsert method '%s' is not supported. No data will be copied.",
+                    upsert_method,
+                )
 
         return None
 
