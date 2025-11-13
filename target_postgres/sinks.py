@@ -7,6 +7,7 @@ import typing as t
 import uuid
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql as postgres_sa
 from singer_sdk.sql import SQLSink
 from sqlalchemy.sql.expression import bindparam
 
@@ -343,7 +344,7 @@ class PostgresSink(SQLSink):
             elif upsert_method == "on_conflict":
                 # Use the ON CONFLICT clause to handle upserts
                 insert_stmt = (
-                    sa.insert(to_table)
+                    postgres_sa.insert(to_table)
                     .from_select(
                         names=from_table.columns, select=sa.select(from_table)
                     )
