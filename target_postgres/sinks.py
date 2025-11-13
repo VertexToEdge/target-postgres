@@ -343,7 +343,7 @@ class PostgresSink(SQLSink):
             elif upsert_method == "on_conflict":
                 # Use the ON CONFLICT clause to handle upserts
                 insert_stmt = (
-                    sa_postgres.insert(to_table)
+                    sa.insert(to_table)
                     .from_select(
                         names=from_table.columns, select=sa.select(from_table)
                     )
